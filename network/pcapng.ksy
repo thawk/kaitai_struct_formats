@@ -46,17 +46,40 @@ types:
       block_len:
         # calculated according to byte_order
         value: 'is_big_endian ? raw_block_len[0]*0x1000000 + raw_block_len[1]*0x10000 + raw_block_len[2]*0x100 + raw_block_len[3] : raw_block_len[3]*0x1000000 + raw_block_len[2]*0x10000 + raw_block_len[1]*0x100 + raw_block_len[0]'
+  padding4: # padding to 4 bytes
+    params:
+      - id: len_value
+        type: u2
+    seq:
+      - id: padding
+        size: size
+        if: size > 0
+    instances:
+      size:
+        value: (len_value + 3) / 4 * 4 - len_value
   options:
+    params:
+      - id: block_type
+        type: u4
+        enum: blocktype
     seq:
       - id: options
-        type: option
+        type:
+          switch-on: block_type
+          cases:
+            'blocktype::section_header.to_i': option_shb
+            'blocktype::interface_description.to_i': option_idb
+            'blocktype::enhanced_packet.to_i': option_epb
+            'blocktype::interface_statistics.to_i': option_isb
+            'blocktype::name_resolution.to_i': option_nrb
+            _ : option_common
         repeat: eos
-  option:
+  option_common:
     seq:
       - id: type
         -orig-id: Option Code
         type: u2
-        enum: optcode
+        enum: optcode_common
       - id: len_value
         -orig-id: Option Length
         type: u2
@@ -64,8 +87,77 @@ types:
         -orig-id: Option Value
         size: len_value
       - id: padding
-        size: (len_value + 3) / 4 * 4 - len_value
-        if: (len_value + 3) / 4 * 4 > len_value
+        type: padding4(len_value)
+  option_shb:
+    seq:
+      - id: type
+        -orig-id: Option Code
+        type: u2
+        enum: optcode_shb
+      - id: len_value
+        -orig-id: Option Length
+        type: u2
+      - id: value
+        -orig-id: Option Value
+        size: len_value
+      - id: padding
+        type: padding4(len_value)
+  option_idb:
+    seq:
+      - id: type
+        -orig-id: Option Code
+        type: u2
+        enum: optcode_idb
+      - id: len_value
+        -orig-id: Option Length
+        type: u2
+      - id: value
+        -orig-id: Option Value
+        size: len_value
+      - id: padding
+        type: padding4(len_value)
+  option_epb:
+    seq:
+      - id: type
+        -orig-id: Option Code
+        type: u2
+        enum: optcode_epb
+      - id: len_value
+        -orig-id: Option Length
+        type: u2
+      - id: value
+        -orig-id: Option Value
+        size: len_value
+      - id: padding
+        type: padding4(len_value)
+  option_isb:
+    seq:
+      - id: type
+        -orig-id: Option Code
+        type: u2
+        enum: optcode_isb
+      - id: len_value
+        -orig-id: Option Length
+        type: u2
+      - id: value
+        -orig-id: Option Value
+        size: len_value
+      - id: padding
+        type: padding4(len_value)
+  option_nrb:
+    seq:
+      - id: type
+        -orig-id: Option Code
+        type: u2
+        enum: optcode_nrb
+      - id: len_value
+        -orig-id: Option Length
+        type: u2
+      - id: value
+        -orig-id: Option Value
+        size: len_value
+      - id: padding
+        type: padding4(len_value)
   block:
     meta:
       endian:
@@ -82,17 +174,26 @@ types:
         -orig-id: Block Total Length
         type: u4
       - id: body
-        # block type + 2 * total len = 12
-        size: block_len - 12
+        size: block_len - common_len
         type:
           switch-on: type
           cases:
             'blocktype::interface_description': interface_desc_blk
             'blocktype::enhanced_packet': enhanced_pkt_blk
             'blocktype::simple_packet': simple_pkt_blk
+            'blocktype::interface_statistics': interface_statistics_blk
+            'blocktype::name_resolution': name_resolution_blk
+            'blocktype::systemd_journal_export': systemd_journal_export_blk
+            'blocktype::decryption_secrets': decryption_secrets_blk
+            'blocktype::custom_1': custom_blk
+            'blocktype::custom_2': custom_blk
       - id: block_len2
         -orig-id: Block Total Length
         type: u4
+    instances:
+      common_len:
+        # block type + 2 * total len = 12
+        value: 12
   section_header_block_part2:
     meta:
       endian:
@@ -112,7 +213,7 @@ types:
         type: u8
       - id: options
         -orig-id: Options
-        type: options
+        type: options(blocktype::section_header.to_i)
         size: _parent.block_len - 12 - 16
         if: _parent.block_len - 12 - 16 > 0
       - id: block_len2
@@ -131,9 +232,9 @@ types:
         type: u4
       - id: options
         -orig-id: Options
-        type: options
-        size: _parent.block_len - 12 - 8
-        if: _parent.block_len - 12 - 8 > 0
+        type: options(_parent.type.to_i)
+        size: _parent.block_len - _parent.common_len - 8
+        if: _parent.block_len - _parent.common_len - 8 > 0
   enhanced_pkt_blk:
     seq:
       - id: interface_id
@@ -160,18 +261,15 @@ types:
             'linktype::ppi': packet_ppi
             'linktype::ethernet': ethernet_frame
       - id: padding
-        size: len_padding
-        if: len_padding > 0
+        type: padding4(captured_len)
       - id: options
         -orig-id: Options
-        type: options
+        type: options(_parent.type.to_i)
         size: len_options
         if: len_options > 0
     instances:
-      len_padding:
-        value: (captured_len + 3) / 4 * 4 - captured_len
       len_options:
-        value: _parent.block_len - 12 - 20 - captured_len - len_padding
+        value: _parent.block_len - _parent.common_len - 20 - captured_len - padding.size
       idb:
         value: _parent._parent.blocks[interface_id].body.as<interface_desc_blk>
   simple_pkt_blk:
@@ -188,11 +286,9 @@ types:
             'linktype::ppi': packet_ppi
             'linktype::ethernet': ethernet_frame
     instances:
-      len_padding:
-        value: (len_packet + 3) / 4 * 4 - len_packet
       idb:
         value: _parent._parent.blocks[0].body.as<interface_desc_blk>
-  name_resolution_pkt:
+  name_resolution_blk:
     seq:
       - id: records
         type: name_resolution_record
@@ -200,7 +296,7 @@ types:
         repeat-until: _.type == nrrtype::end
       - id: options
         -orig-id: Options
-        type: options
+        type: options(_parent.type.to_i)
         size-eos: true
   name_resolution_record:
     seq:
@@ -235,6 +331,60 @@ types:
         type: strz
         encoding: UTF-8
         repeat: eos
+  interface_statistics_blk:
+    seq:
+      - id: interface_id
+        -orig_id: Interface ID
+        type: u4
+      - id: timestamp_high
+        -orig_id: Timestamp (High)
+        type: u4
+      - id: timestamp_low
+        -orig_id: Timestamp (Low)
+        type: u4
+      - id: options
+        -orig-id: Options
+        type: options(_parent.type.to_i)
+        size: len_options
+        if: len_options > 0
+    instances:
+      len_options:
+        value: _parent.block_len - _parent.common_len - 12
+  systemd_journal_export_blk:
+    seq:
+      - id: entries
+        -orig_id: Journal Entry
+        size: _parent.block_len - _parent.common_len
+  decryption_secrets_blk:
+    seq:
+      - id: secrets_type
+        -orig-id: Secrets Type
+        type: u4
+        enum: sectypes
+      - id: len_data
+        -orig-id: Secrets Length
+        type: u4
+      - id: data
+        -orig-id: Secrets Data
+        type: u4
+      - id: padding
+        type: padding4(len_data)
+      - id: options
+        -orig-id: Options
+        type: options(_parent.type.to_i)
+        size: len_options
+        if: len_options > 0
+    instances:
+      len_options:
+        value: _parent.block_len - _parent.common_len - 12
+  custom_blk:
+    seq:
+      - id: pen
+        -orig-id: Private Enterprise Number (PEN)
+        type: u4
+      - id: data_and_options
+        # Don't know how to seperate custom data from options
+        size: _parent.block_len - _parent.common_len - 4
 enums:
   blocktype:
     0x00000001: interface_description
@@ -371,13 +521,31 @@ enums:
     262: zwave_r3
     263: wattstopper_dlm
     264: iso_14443
-  optcode:
+  optcode_common:
     0: end_of_opt
     1: comment
+    2988: custom_utf8_1
+    2989: custom_bin_1
+    19372: custom_utf8_2
+    19373: custom_bin_2
+  optcode_shb:
+    0: end_of_opt
+    1: comment
+    2988: custom_utf8_1
+    2989: custom_bin_1
+    19372: custom_utf8_2
+    19373: custom_bin_2
     # for SHB
     2: shb_hardware
     3: shb_os
     4: shb_userappl
+  optcode_idb:
+    0: end_of_opt
+    1: comment
+    2988: custom_utf8_1
+    2989: custom_bin_1
+    19372: custom_utf8_2
+    19373: custom_bin_2
     # for IPB
     2: if_name
     3: if_description
@@ -393,16 +561,48 @@ enums:
     13: if_fcslen
     14: if_tsoffset
     15: if_hardware
-    # for EPB
-    2: epb_flags
-    3: epb_hash
-    4: epb_dropcount
+  optcode_epb:
+    0: end_of_opt
+    1: comment
     2988: custom_utf8_1
     2989: custom_bin_1
     19372: custom_utf8_2
     19373: custom_bin_2
+    # for EPB
+    2: epb_flags
+    3: epb_hash
+    4: epb_dropcount
+  optcode_isb:
+    0: end_of_opt
+    1: comment
+    2988: custom_utf8_1
+    2989: custom_bin_1
+    19372: custom_utf8_2
+    19373: custom_bin_2
+    # for ISB
+    2: isb_starttime
+    3: isb_endtime
+    4: isb_ifrecv
+    5: isb_ifdrop
+    6: isb_filteraccept
+    7: isb_osdrop
+    8: isb_usrdeliv
+  optcode_nrb:
+    0: end_of_opt
+    1: comment
+    2988: custom_utf8_1
+    2989: custom_bin_1
+    19372: custom_utf8_2
+    19373: custom_bin_2
+    # for NRB
+    2: ns_dnsname
+    3: ns_dnsip4addr
+    4: ns_dnsip6addr
   nrrtype: # Name Resolution Record Type
     0x0000: end
     0x0001: ipv4
     0x0002: ipv6
+  sectypes: # Secrets Types
+    0x544c534b: tls_key_log       # TLS Key Log
+    0x57474b4c: wireguard_key_log # WireGuard Key Log.
 
